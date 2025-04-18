@@ -1,172 +1,158 @@
-function analyzePlayer() {
-    const playerName = document.getElementById('playerInput').value.trim();
-    const resultsDiv = document.getElementById('results');
-    
-    if (!playerName) {
-        resultsDiv.innerHTML = '<p>Please enter a player name to analyze.</p>';
-        return;
-    }
-    
-    // This is a mock analysis - in a real app, you'd call an API here
-    const randomAnalysis = Math.random();
-    
-    if (randomAnalysis > 0.7) {
-        resultsDiv.innerHTML = `
-            <h2>${playerName}</h2>
-            <p>🔥 This player is on a hot streak!</p>
-            <p>Consider starting them in your lineup.</p>
-        `;
-    } else if (randomAnalysis > 0.3) {
-        resultsDiv.innerHTML = `
-            <h2>${playerName}</h2>
-            <p>🟡 This player is performing at average levels.</p>
-            <p>They might be worth starting depending on your other options.</p>
-        `;
-    } else {
-        resultsDiv.innerHTML = `
-            <h2>${playerName}</h2>
-            <p>❄️ This player is in a cold streak.</p>
-            <p>You might want to bench them until their performance improves.</p>
-        `;
-    }
-}
-
-// Add event listener for Enter key
-document.getElementById('playerInput').addEventListener('keypress', function(e) {
-    if (e.key === 'Enter') {
-        analyzePlayer();
-    }
-});
-// Cache player IDs to reduce API calls
+/*********************
+ *  CORE CONSTANTS   *
+ *********************/
+const API_BASE = 'https://statsapi.web.nhl.com/api/v1';
 const playerCache = new Map();
+let comparisonCache = null;
 
-async function searchPlayerId(playerName) {
-  if (playerCache.has(playerName)) {
-    return playerCache.get(playerName);
-  }
+/*********************
+ *  CORE FUNCTIONS   *
+ *********************/
+async function fetchWithDelay(url, delayMs = 300) {
+  await new Promise(resolve => setTimeout(resolve, delayMs)); // Avoid rate limits
+  const response = await fetch(url);
+  return response.json();
+}
 
-  const response = await fetch(
-    `https://statsapi.web.nhl.com/api/v1/people?name=${encodeURIComponent(playerName)}`
-  );
-  const data = await response.json();
+async function getPlayerId(name) {
+  if (playerCache.has(name)) return playerCache.get(name);
   
-  if (!data.people || data.people.length === 0) {
-    throw new Error("Player not found. Check spelling or try full name (e.g., 'Auston Matthews')");
-  }
-
-  const player = data.people[0];
-  playerCache.set(playerName, player.id);
-  return player.id;
+  const data = await fetchWithDelay(`${API_BASE}/people?name=${encodeURIComponent(name)}`);
+  if (!data.people?.length) throw new Error(`Player "${name}" not found. Try full names like "Nathan MacKinnon"`);
+  
+  playerCache.set(name, data.people[0].id);
+  return data.people[0].id;
 }
 
-async function getPlayerStats(playerId) {
-  const [currentRes, gameLogRes] = await Promise.all([
-    fetch(`https://statsapi.web.nhl.com/api/v1/people/${playerId}/stats?stats=statsSingleSeason`),
-    fetch(`https://statsapi.web.nhl.com/api/v1/people/${playerId}/stats?stats=gameLog`)
+async function getPlayerData(playerId) {
+  const [currentSeason, gameLog, details] = await Promise.all([
+    fetchWithDelay(`${API_BASE}/people/${playerId}/stats?stats=statsSingleSeason`),
+    fetchWithDelay(`${API_BASE}/people/${playerId}/stats?stats=gameLog`),
+    fetchWithDelay(`${API_BASE}/people/${playerId}`)
   ]);
-
-  const [currentData, gameLogData] = await Promise.all([
-    currentRes.json(),
-    gameLogRes.json()
-  ]);
-
+  
   return {
-    currentSeason: currentData.stats[0]?.splits[0]?.stat || {},
-    lastFiveGames: gameLogData.stats[0]?.splits?.slice(0, 5) || []
+    currentStats: currentSeason.stats[0]?.splits[0]?.stat || {},
+    lastFiveGames: gameLog.stats[0]?.splits?.slice(0, 5) || [],
+    details: details.people[0]
   };
 }
 
-function calculateTrend(lastFiveGames) {
-  const points = lastFiveGames.reduce((sum, game) => sum + (game.stat.points || 0), 0);
+/*********************
+ *  ANALYSIS TOOLS   *
+ *********************/
+function calculateFantasyPoints(stats) {
+  // Standard fantasy point calculation (adjust as needed)
+  return (stats.goals || 0) * 2 + (stats.assists || 0) * 1 + (stats.shots || 0) * 0.1;
+}
+
+function analyzeTrend(games) {
+  const points = games.reduce((sum, game) => sum + (game.stat.points || 0), 0);
   return {
-    points,
-    trend: points >= 8 ? '🔥 Hot Streak' : points <= 2 ? '❄️ Cold Streak' : '🟡 Average'
+    level: points >= 8 ? '🔥 Hot' : points <= 2 ? '❄️ Cold' : '🟡 Neutral',
+    points
   };
 }
 
-async function analyzePlayer() {
-  const playerName = document.getElementById('playerInput').value.trim();
-  if (!playerName) return;
-
-  const resultsDiv = document.getElementById('results');
-  resultsDiv.innerHTML = '<div class="loading">⏳ Loading player data...</div>';
-
-  try {
-    const playerId = await searchPlayerId(playerName);
-    const { currentSeason, lastFiveGames } = await getPlayerStats(playerId);
-    const { trend, points } = calculateTrend(lastFiveGames);
-
-    resultsDiv.innerHTML = `
-      <div class="player-card">
-        <h2>${playerName}</h2>
-        <p class="trend ${trend.includes('Hot') ? 'hot' : trend.includes('Cold') ? 'cold' : 'avg'}">${trend}</p>
-        <div class="stats-grid">
-          <div>📊 <strong>Points:</strong> ${currentSeason.points || 0}</div>
-          <div>🥅 <strong>Goals:</strong> ${currentSeason.goals || 0}</div>
-          <div>🎯 <strong>Assists:</strong> ${currentSeason.assists || 0}</div>
-          <div>📈 <strong>Last 5 GP:</strong> ${points} pts</div>
-        </div>
-        <button id="compareBtn">Compare With Another Player</button>
+/*********************
+ *  UI INTERACTIONS  *
+ *********************/
+function displayPlayer(data) {
+  const { details, currentStats, lastFiveGames } = data;
+  const trend = analyzeTrend(lastFiveGames);
+  
+  document.getElementById('results').innerHTML = `
+    <div class="player-card">
+      <h2>${details.fullName} <span class="position">${details.primaryPosition.abbreviation}</span></h2>
+      <p class="team">${details.currentTeam?.name || 'No team data'}</p>
+      
+      <div class="trend-indicator ${trend.level.includes('Hot') ? 'hot' : trend.level.includes('Cold') ? 'cold' : 'neutral'}">
+        ${trend.level} Streak (${trend.points} pts in last 5 GP)
       </div>
-    `;
-
-    // Add comparison functionality
-    document.getElementById('compareBtn').addEventListener('click', comparePlayers);
-  } catch (error) {
-    resultsDiv.innerHTML = `<div class="error">❌ ${error.message}</div>`;
-  }
+      
+      <div class="stats-grid">
+        <div><span>🏒 GP:</span> ${currentStats.games || 0}</div>
+        <div><span>🥅 G:</span> ${currentStats.goals || 0}</div>
+        <div><span>🎯 A:</span> ${currentStats.assists || 0}</div>
+        <div><span>📊 PTS:</span> ${currentStats.points || 0}</div>
+        <div><span>🎮 FP:</span> ${calculateFantasyPoints(currentStats).toFixed(1)}</div>
+        <div><span>💪 +/-:</span> ${currentStats.plusMinus || 0}</div>
+      </div>
+      
+      <button class="compare-btn" onclick="prepareComparison(this)" 
+        data-name="${details.fullName}"
+        data-stats='${JSON.stringify(currentStats)}'>
+        Compare Player
+      </button>
+    </div>
+  `;
 }
-let firstPlayerData = null;
 
-async function comparePlayers() {
-  const playerName = prompt("Enter another player to compare:");
-  if (!playerName) return;
+/*********************
+ *  COMPARISON MODE  *
+ *********************/
+function prepareComparison(button) {
+  comparisonCache = {
+    name: button.dataset.name,
+    stats: JSON.parse(button.dataset.stats)
+  };
+  document.getElementById('playerInput').placeholder = "Enter player to compare...";
+}
 
-  try {
-    const playerId = await searchPlayerId(playerName);
-    const { currentSeason } = await getPlayerStats(playerId);
-    
-    if (!firstPlayerData) {
-      firstPlayerData = {
-        name: document.getElementById('playerInput').value.trim(),
-        stats: JSON.parse(document.querySelector('.stats-grid').dataset.stats)
-      };
-      alert(`Now comparing with ${playerName}...`);
-      return;
-    }
-
-    // Render comparison table
-    document.getElementById('results').innerHTML = `
-      <div class="comparison-table">
-        <h3>Player Comparison</h3>
-        <table>
+function displayComparison(player2Data) {
+  const p1 = comparisonCache;
+  const p2 = {
+    name: player2Data.details.fullName,
+    stats: player2Data.currentStats
+  };
+  
+  document.getElementById('results').innerHTML = `
+    <div class="comparison">
+      <h3>${p1.name} vs ${p2.name}</h3>
+      <table>
+        <tr><th>Stat</th><th>${p1.name}</th><th>${p2.name}</th></tr>
+        ${['goals', 'assists', 'points', 'plusMinus'].map(stat => `
           <tr>
-            <th>Stat</th>
-            <th>${firstPlayerData.name}</th>
-            <th>${playerName}</th>
+            <td>${stat}</td>
+            <td class="${p1.stats[stat] > p2.stats[stat] ? 'leader' : ''}">${p1.stats[stat] || 0}</td>
+            <td class="${p2.stats[stat] > p1.stats[stat] ? 'leader' : ''}">${p2.stats[stat] || 0}</td>
           </tr>
-          ${Object.keys(firstPlayerData.stats).map(stat => `
-            <tr>
-              <td>${stat}</td>
-              <td>${firstPlayerData.stats[stat]}</td>
-              <td>${currentSeason[stat] || 0}</td>
-            </tr>
-          `).join('')}
-        </table>
-      </div>
-    `;
+        `).join('')}
+      </table>
+    </div>
+  `;
+  comparisonCache = null;
+}
+
+/*********************
+ *  MAIN CONTROLLER  *
+ *********************/
+async function analyzePlayer() {
+  const name = document.getElementById('playerInput').value.trim();
+  if (!name) return;
+  
+  try {
+    const playerId = await getPlayerId(name);
+    const playerData = await getPlayerData(playerId);
     
-    firstPlayerData = null;
+    if (comparisonCache) {
+      displayComparison(playerData);
+    } else {
+      displayPlayer(playerData);
+    }
+    
   } catch (error) {
-    alert(error.message);
+    document.getElementById('results').innerHTML = `
+      <div class="error">⚠️ ${error.message}</div>
+    `;
+  } finally {
+    document.getElementById('playerInput').value = '';
   }
 }
-function calculateAdvancedMetrics(stats) {
-  const pdo = (stats.shootingPercentage + stats.savePercentage) || 'N/A';
-  const xGF = stats.xGoalsFor || 'N/A';
-  return { pdo, xGF };
-}
-async function getTeamRoster(teamId) {
-  const res = await fetch(`https://statsapi.web.nhl.com/api/v1/teams/${teamId}/roster`);
-  return await res.json();
-}
+
+/*********************
+ *  INITIALIZATION   *
+ *********************/
+document.getElementById('playerInput').addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') analyzePlayer();
+});
