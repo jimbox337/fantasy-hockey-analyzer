@@ -82,3 +82,44 @@ footer {
         width: 100%;
     }
 }
+.loading {
+  color: #1a4b8c;
+  text-align: center;
+  padding: 20px;
+}
+
+.player-card {
+  background: white;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.trend {
+  font-weight: bold;
+  text-align: center;
+  padding: 5px;
+  border-radius: 4px;
+  margin: 10px 0;
+}
+
+.hot { background: #e6f7ee; color: #2e7d32; }
+.cold { background: #ffebee; color: #c62828; }
+.avg { background: #fff8e1; color: #f57f17; }
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 15px 0;
+}
+
+#compareBtn {
+  width: 100%;
+  background: #1a4b8c;
+  margin-top: 10px;
+}
+
+#compareBtn:hover {
+  background: #0d3a73;
+}
