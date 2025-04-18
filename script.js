@@ -37,3 +37,82 @@ document.getElementById('playerInput').addEventListener('keypress', function(e) 
         analyzePlayer();
     }
 });
+// Cache player IDs to reduce API calls
+const playerCache = new Map();
+
+async function searchPlayerId(playerName) {
+  if (playerCache.has(playerName)) {
+    return playerCache.get(playerName);
+  }
+
+  const response = await fetch(
+    `https://statsapi.web.nhl.com/api/v1/people?name=${encodeURIComponent(playerName)}`
+  );
+  const data = await response.json();
+  
+  if (!data.people || data.people.length === 0) {
+    throw new Error("Player not found. Check spelling or try full name (e.g., 'Auston Matthews')");
+  }
+
+  const player = data.people[0];
+  playerCache.set(playerName, player.id);
+  return player.id;
+}
+
+async function getPlayerStats(playerId) {
+  const [currentRes, gameLogRes] = await Promise.all([
+    fetch(`https://statsapi.web.nhl.com/api/v1/people/${playerId}/stats?stats=statsSingleSeason`),
+    fetch(`https://statsapi.web.nhl.com/api/v1/people/${playerId}/stats?stats=gameLog`)
+  ]);
+
+  const [currentData, gameLogData] = await Promise.all([
+    currentRes.json(),
+    gameLogRes.json()
+  ]);
+
+  return {
+    currentSeason: currentData.stats[0]?.splits[0]?.stat || {},
+    lastFiveGames: gameLogData.stats[0]?.splits?.slice(0, 5) || []
+  };
+}
+
+function calculateTrend(lastFiveGames) {
+  const points = lastFiveGames.reduce((sum, game) => sum + (game.stat.points || 0), 0);
+  return {
+    points,
+    trend: points >= 8 ? '🔥 Hot Streak' : points <= 2 ? '❄️ Cold Streak' : '🟡 Average'
+  };
+}
+
+async function analyzePlayer() {
+  const playerName = document.getElementById('playerInput').value.trim();
+  if (!playerName) return;
+
+  const resultsDiv = document.getElementById('results');
+  resultsDiv.innerHTML = '<div class="loading">⏳ Loading player data...</div>';
+
+  try {
+    const playerId = await searchPlayerId(playerName);
+    const { currentSeason, lastFiveGames } = await getPlayerStats(playerId);
+    const { trend, points } = calculateTrend(lastFiveGames);
+
+    resultsDiv.innerHTML = `
+      <div class="player-card">
+        <h2>${playerName}</h2>
+        <p class="trend ${trend.includes('Hot') ? 'hot' : trend.includes('Cold') ? 'cold' : 'avg'}">${trend}</p>
+        <div class="stats-grid">
+          <div>📊 <strong>Points:</strong> ${currentSeason.points || 0}</div>
+          <div>🥅 <strong>Goals:</strong> ${currentSeason.goals || 0}</div>
+          <div>🎯 <strong>Assists:</strong> ${currentSeason.assists || 0}</div>
+          <div>📈 <strong>Last 5 GP:</strong> ${points} pts</div>
+        </div>
+        <button id="compareBtn">Compare With Another Player</button>
+      </div>
+    `;
+
+    // Add comparison functionality
+    document.getElementById('compareBtn').addEventListener('click', comparePlayers);
+  } catch (error) {
+    resultsDiv.innerHTML = `<div class="error">❌ ${error.message}</div>`;
+  }
+}
