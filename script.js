@@ -116,3 +116,57 @@ async function analyzePlayer() {
     resultsDiv.innerHTML = `<div class="error">❌ ${error.message}</div>`;
   }
 }
+let firstPlayerData = null;
+
+async function comparePlayers() {
+  const playerName = prompt("Enter another player to compare:");
+  if (!playerName) return;
+
+  try {
+    const playerId = await searchPlayerId(playerName);
+    const { currentSeason } = await getPlayerStats(playerId);
+    
+    if (!firstPlayerData) {
+      firstPlayerData = {
+        name: document.getElementById('playerInput').value.trim(),
+        stats: JSON.parse(document.querySelector('.stats-grid').dataset.stats)
+      };
+      alert(`Now comparing with ${playerName}...`);
+      return;
+    }
+
+    // Render comparison table
+    document.getElementById('results').innerHTML = `
+      <div class="comparison-table">
+        <h3>Player Comparison</h3>
+        <table>
+          <tr>
+            <th>Stat</th>
+            <th>${firstPlayerData.name}</th>
+            <th>${playerName}</th>
+          </tr>
+          ${Object.keys(firstPlayerData.stats).map(stat => `
+            <tr>
+              <td>${stat}</td>
+              <td>${firstPlayerData.stats[stat]}</td>
+              <td>${currentSeason[stat] || 0}</td>
+            </tr>
+          `).join('')}
+        </table>
+      </div>
+    `;
+    
+    firstPlayerData = null;
+  } catch (error) {
+    alert(error.message);
+  }
+}
+function calculateAdvancedMetrics(stats) {
+  const pdo = (stats.shootingPercentage + stats.savePercentage) || 'N/A';
+  const xGF = stats.xGoalsFor || 'N/A';
+  return { pdo, xGF };
+}
+async function getTeamRoster(teamId) {
+  const res = await fetch(`https://statsapi.web.nhl.com/api/v1/teams/${teamId}/roster`);
+  return await res.json();
+}
